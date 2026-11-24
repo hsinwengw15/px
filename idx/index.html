@@ -42,6 +42,11 @@
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .actions { display: flex; gap: 8px; margin-top: 16px; }
   .actions .danger { color: #dc2626; margin-right: auto; }
+  .order { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; color: var(--muted); }
+  .order span { margin-right: auto; }
+  .order button { padding: 4px 10px; font-size: 13px; }
+  #groups button.dragging { opacity: .4; }
+  #groups button.dropto { outline: 2px dashed var(--accent); outline-offset: 2px; }
   .tip { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
   .setup { max-width: 560px; margin: 40px auto; padding: 20px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; line-height: 1.7; }
 </style>
@@ -65,6 +70,11 @@
     <strong id="dlgTitle">編輯群組</strong>
     <label>群組名稱</label>
     <input id="gName" required>
+    <div class="order" id="orderRow">
+      <span>順序：第 <b id="orderNo"></b> 個（數字鍵）</span>
+      <button type="button" id="moveLeft">← 往前</button>
+      <button type="button" id="moveRight">往後 →</button>
+    </div>
     <div id="slots"></div>
     <p class="tip">代號用 Yahoo Finance 格式：<br>
       指數 ^N225、^KS11、^HSI、000001.SS、^TWII（台股加權）、^IXIC、^SOX<br>
@@ -84,11 +94,11 @@
 const API = "https://quote-proxy.cindywengw15.workers.dev/";
 
 const DEFAULT_GROUPS = [
-  { id: "fx", name: "匯率", charts: [
-    { name: "美金 / 台幣",   symbol: "TWD=X" },
-    { name: "人民幣 / 台幣", symbol: "CNYTWD=X" },
-    { name: "日圓 / 台幣",   symbol: "JPYTWD=X" },
-    { name: "韓元 / 台幣",   symbol: "KRWTWD=X" },
+  { id: "tw", name: "台股", charts: [
+    { name: "加權指數", symbol: "^TWII" },
+    { name: "元大台灣50", symbol: "0050.TW" },
+    { name: "台積電", symbol: "2330.TW" },
+    { name: "聯發科", symbol: "2454.TW" },
   ]},
   { id: "asia", name: "亞股指數", charts: [
     { name: "日經 225", symbol: "^N225" },
@@ -102,6 +112,12 @@ const DEFAULT_GROUPS = [
     { name: "道瓊工業",     symbol: "^DJI" },
     { name: "S&P 500",      symbol: "^GSPC" },
   ]},
+  { id: "fx", name: "匯率", charts: [
+    { name: "美金 / 台幣",   symbol: "TWD=X" },
+    { name: "人民幣 / 台幣", symbol: "CNYTWD=X" },
+    { name: "日圓 / 台幣",   symbol: "JPYTWD=X" },
+    { name: "韓元 / 台幣",   symbol: "KRWTWD=X" },
+  ]},
 ];
 // 週期 → Yahoo 的 interval 與抓取範圍
 const INTERVALS = [
@@ -114,10 +130,10 @@ const INTERVALS = [
 ];
 const REFRESH_MS = 60_000;
 
-const KEY = "watchboard-yahoo.v1";
+const KEY = "watchboard-yahoo.v2";
 const load = () => { try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } };
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} };
-let state = load() || { groups: structuredClone(DEFAULT_GROUPS), current: "asia", iv: "5m" };
+let state = load() || { groups: structuredClone(DEFAULT_GROUPS), current: "tw", iv: "5m" };
 if (!state.groups?.length) state.groups = structuredClone(DEFAULT_GROUPS);
 const fromHash = decodeURIComponent(location.hash.slice(1));
 if (fromHash && state.groups.some(g => g.id === fromHash)) state.current = fromHash;
@@ -193,6 +209,13 @@ function renderBars() {
     if (n < 9) { b.dataset.key = n + 1; b.title = `按 ${n + 1} 切換`; }
     if (g.id === currentGroup().id) b.className = "on";
     b.onclick = () => switchTo(g);
+    // 電腦上可以直接拖曳群組按鈕調整順序
+    b.draggable = true;
+    b.ondragstart = (e) => { dragFrom = n; e.dataTransfer.effectAllowed = "move"; b.classList.add("dragging"); };
+    b.ondragend = () => b.classList.remove("dragging");
+    b.ondragover = (e) => { e.preventDefault(); b.classList.add("dropto"); };
+    b.ondragleave = () => b.classList.remove("dropto");
+    b.ondrop = (e) => { e.preventDefault(); moveGroup(dragFrom, n); };
     $("groups").appendChild(b);
   });
   $("intervals").innerHTML = INTERVALS.map(i =>
@@ -279,6 +302,14 @@ async function refresh() {
   }));
 }
 
+let dragFrom = null;
+function moveGroup(from, to) {
+  if (from == null || from === to || to < 0 || to >= state.groups.length) { renderBars(); return; }
+  const [g] = state.groups.splice(from, 1);
+  state.groups.splice(to, 0, g);
+  save(); renderBars();
+}
+
 function switchTo(g) { state.current = g.id; history.replaceState(null, "", "#" + g.id); save(); render(); }
 
 $("intervals").addEventListener("click", e => {
@@ -315,10 +346,22 @@ function openEditor(group) {
     row.querySelector(".lbl").value = c.name || "";
     $("slots").appendChild(row);
   }
+  $("orderRow").style.display = group ? "" : "none";
+  if (group) updateOrderNo();
   $("delBtn").style.display = group && state.groups.length > 1 ? "" : "none";
   $("resetBtn").style.display = group && DEFAULT_GROUPS.some(d => d.id === group.id) ? "" : "none";
   $("dlg").showModal();
 }
+function updateOrderNo() {
+  const i = state.groups.indexOf(editing);
+  $("orderNo").textContent = i + 1;
+  $("moveLeft").disabled = i === 0;
+  $("moveRight").disabled = i === state.groups.length - 1;
+}
+// 手機上用編輯視窗裡的按鈕調整順序（馬上生效）
+$("moveLeft").onclick = () => { const i = state.groups.indexOf(editing); moveGroup(i, i - 1); updateOrderNo(); };
+$("moveRight").onclick = () => { const i = state.groups.indexOf(editing); moveGroup(i, i + 1); updateOrderNo(); };
+
 $("editBtn").onclick = () => openEditor(currentGroup());
 $("addBtn").onclick = () => openEditor(null);
 $("dlg").addEventListener("close", () => {
