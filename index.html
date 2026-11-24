@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>台幣匯率四格看盤</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f4f5f7; --card:#ffffff; --ink:#15202b; --muted:#6b7785; --line:#dde1e6; --accent:#d6127e; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f141a; --card:#171e26; --ink:#e8edf2; --muted:#93a0ad; --line:#26313c; } }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.4 -apple-system, "PingFang TC", "Helvetica Neue", sans-serif; display: flex; flex-direction: column; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 14px; }
+  h1 { font-size: 17px; margin: 0; font-weight: 700; }
+  .bar { display: flex; gap: 6px; flex-wrap: wrap; }
+  .bar button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
+  .bar button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .note { color: var(--muted); font-size: 12px; margin-left: auto; }
+  main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 8px; padding: 0 8px 8px; min-height: 0; }
+  .cell { background: var(--card); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+  .cell h2 { font-size: 14px; margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; }
+  .cell h2 span { color: var(--muted); font-weight: 400; }
+  .chart { flex: 1; min-height: 0; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; grid-template-rows: none; grid-auto-rows: 420px; } .note { margin-left: 0; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>台幣匯率四格看盤</h1>
+  <div class="bar" id="bar"></div>
+  <div class="note">數字為「1 外幣 = 多少台幣」的國際報價，非銀行牌告買賣價</div>
+</header>
+<main id="grid"></main>
+
+<script src="https://s3.tradingview.com/tv.js"></script>
+<script>
+{
+  // 想換幣別：改這裡的 symbol 即可（格式 FX_IDC:外幣代碼TWD）
+  const PAIRS = [
+    { name: '美金 / 台幣',   symbol: 'FX_IDC:USDTWD', hint: 'USD/TWD' },
+    { name: '人民幣 / 台幣', symbol: 'FX_IDC:CNYTWD', hint: 'CNY/TWD' },
+    { name: '日圓 / 台幣',   symbol: 'FX_IDC:JPYTWD', hint: 'JPY/TWD' },
+    { name: '韓元 / 台幣',   symbol: 'FX_IDC:KRWTWD', hint: 'KRW/TWD' },
+  ];
+  const INTERVALS = [
+    { label: '60 分', v: '60' },
+    { label: '日線', v: 'D' },
+    { label: '週線', v: 'W' },
+    { label: '月線', v: 'M' },
+  ];
+
+  let interval = 'D';
+  try { interval = localStorage.getItem('twdfx-interval') || 'D'; } catch (e) {}
+
+  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const grid = document.getElementById('grid');
+  const bar = document.getElementById('bar');
+
+  function render() {
+    bar.innerHTML = INTERVALS.map(i =>
+      `<button data-v="${i.v}" class="${i.v === interval ? 'on' : ''}">${i.label}</button>`).join('');
+    grid.innerHTML = PAIRS.map((p, i) =>
+      `<section class="cell"><h2>${p.name}<span>${p.hint}</span></h2><div class="chart" id="c${i}"></div></section>`).join('');
+    if (!window.TradingView) {
+      grid.innerHTML = '<p style="padding:16px">圖表載入失敗，請確認有連上網路後重新整理。</p>';
+      return;
+    }
+    PAIRS.forEach((p, i) => {
+      new TradingView.widget({
+        container_id: 'c' + i,
+        autosize: true,
+        symbol: p.symbol,
+        interval: interval,
+        timezone: 'Asia/Taipei',
+        theme: dark ? 'dark' : 'light',
+        style: '1',
+        locale: 'zh_TW',
+        hide_side_toolbar: true,
+        allow_symbol_change: true,
+        save_image: false,
+      });
+    });
+  }
+
+  bar.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    interval = b.dataset.v;
+    try { localStorage.setItem('twdfx-interval', interval); } catch (e) {}
+    render();
+  });
+
+  render();
+}
+</script>
+</body>
+</html>
