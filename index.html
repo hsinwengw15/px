@@ -48,6 +48,7 @@
   <div class="bar" id="intervals"></div>
   <div class="right">
     <button id="maBtn" title="顯示／隱藏 5、10、20、60 均線">均線</button>
+    <button id="colorBtn" title="切換 K 線顏色"></button>
     <button id="editBtn">編輯</button>
     <span class="clock" id="clock"></span>
   </div>
@@ -201,11 +202,33 @@ function render() {
       container_id: "c" + i, autosize: true, symbol: sym, interval: iv,
       timezone: "Asia/Taipei", theme: dark ? "dark" : "light", style: "1", locale: "zh_TW",
       hide_side_toolbar: true, allow_symbol_change: true, save_image: false,
+      overrides: candleColors(),
+      studies_overrides: volumeColors(),
       // 5、10、20、60 均線（免費版不能各自設顏色，左上角會標出各條數值）
       studies: state.ma === false ? [] : [5, 10, 20, 60].map(n => ({ id: "MASimple@tv-basicstudies", inputs: { length: n } })),
     });
   });
 }
+
+// K 線顏色：預設台股習慣「紅漲綠跌」
+const RED = "#ef5350", GREEN = "#26a69a";
+const upC = () => state.redUp === false ? GREEN : RED;
+const downC = () => state.redUp === false ? RED : GREEN;
+function candleColors() {
+  const p = "mainSeriesProperties.candleStyle.";
+  return { [p + "upColor"]: upC(), [p + "downColor"]: downC(), [p + "borderUpColor"]: upC(),
+           [p + "borderDownColor"]: downC(), [p + "wickUpColor"]: upC(), [p + "wickDownColor"]: downC() };
+}
+function volumeColors() {
+  return { "volume.volume.color.0": downC() + "80", "volume.volume.color.1": upC() + "80" };
+}
+function applyColorBtn() {
+  $("colorBtn").innerHTML = state.redUp === false
+    ? `<span style="color:${GREEN}">綠漲</span><span style="color:${RED}">紅跌</span>`
+    : `<span style="color:${RED}">紅漲</span><span style="color:${GREEN}">綠跌</span>`;
+}
+$("colorBtn").onclick = () => { state.redUp = state.redUp === false; save(); applyColorBtn(); render(); };
+applyColorBtn();
 
 function applyMaBtn() { $("maBtn").className = state.ma === false ? "" : "on"; }
 $("maBtn").onclick = () => { state.ma = state.ma === false; save(); applyMaBtn(); render(); };
