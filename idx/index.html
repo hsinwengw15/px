@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>四格看盤（官方指數測試版）</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f4f5f7; --card:#ffffff; --ink:#15202b; --muted:#6b7785; --line:#dde1e6; --accent:#d6127e;
+          --open:#16a34a; --lunch:#d97706; --closed:#9ca3af; --up:#26a69a; --down:#ef5350; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f141a; --card:#171e26; --ink:#e8edf2; --muted:#93a0ad; --line:#26313c; } }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.4 -apple-system, "PingFang TC", "Helvetica Neue", sans-serif; display: flex; flex-direction: column; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 14px; }
+  h1 { font-size: 17px; margin: 0; font-weight: 700; }
+  h1 small { font-size: 11px; font-weight: 500; color: #fff; background: #6b7785; border-radius: 6px; padding: 1px 6px; margin-left: 6px; vertical-align: 2px; }
+  .bar { display: flex; gap: 6px; flex-wrap: wrap; }
+  button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button[data-key]::before { content: attr(data-key); font-size: 11px; opacity: .55; margin-right: 5px; }
+  @media (hover: none) { button[data-key]::before { display: none; } }
+  .sep { width: 1px; height: 24px; background: var(--line); }
+  .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .clock { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 8px; padding: 0 8px 8px; min-height: 0; }
+  .cell { background: var(--card); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+  .cell h2 { font-size: 14px; margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+  .cell h2 .hint { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: auto; text-align: right; }
+  .quote { display: flex; align-items: baseline; gap: 10px; padding: 6px 12px 0; font-variant-numeric: tabular-nums; }
+  .quote .px { font-size: 20px; font-weight: 600; }
+  .quote .chg.up { color: var(--up); } .quote .chg.down { color: var(--down); }
+  .quote .upd { color: var(--muted); font-size: 12px; margin-left: auto; }
+  .badge { font-size: 11px; font-weight: 500; padding: 1px 7px; border-radius: 999px; color: #fff; }
+  .badge.open { background: var(--open); } .badge.lunch { background: var(--lunch); } .badge.closed { background: var(--closed); }
+  .chart { flex: 1; min-height: 0; position: relative; }
+  .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); padding: 16px; text-align: center; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; grid-template-rows: none; grid-auto-rows: 380px; } .right { margin-left: 0; } }
+  dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink); width: min(460px, 92vw); }
+  dialog::backdrop { background: rgba(0,0,0,.35); }
+  dialog label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  dialog input { width: 100%; font: inherit; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .actions { display: flex; gap: 8px; margin-top: 16px; }
+  .actions .danger { color: #dc2626; margin-right: auto; }
+  .tip { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  .setup { max-width: 560px; margin: 40px auto; padding: 20px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<header>
+  <h1>四格看盤<small>官方指數・測試版</small></h1>
+  <div class="bar" id="groups"></div>
+  <button id="addBtn" title="新增群組">＋</button>
+  <span class="sep"></span>
+  <div class="bar" id="intervals"></div>
+  <div class="right">
+    <button id="editBtn">編輯</button>
+    <span class="clock" id="clock"></span>
+  </div>
+</header>
+<main id="grid"></main>
+
+<dialog id="dlg">
+  <form method="dialog">
+    <strong id="dlgTitle">編輯群組</strong>
+    <label>群組名稱</label>
+    <input id="gName" required>
+    <div id="slots"></div>
+    <p class="tip">代號用 Yahoo Finance 格式：<br>
+      指數 ^N225、^KS11、^HSI、000001.SS、^TWII（台股加權）、^IXIC、^SOX<br>
+      台股 2330.TW、上櫃 6488.TWO、美股 NVDA、匯率 TWD=X（美元/台幣）、JPYTWD=X</p>
+    <div class="actions">
+      <button type="button" class="danger" id="delBtn">刪除群組</button>
+      <button type="button" id="resetBtn">還原預設</button>
+      <button value="cancel" formnovalidate>取消</button>
+      <button value="ok">儲存</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+// ★ 部署好 Cloudflare Worker 之後，把網址貼在這裡
+const API = "";
+
+const DEFAULT_GROUPS = [
+  { id: "fx", name: "匯率", charts: [
+    { name: "美金 / 台幣",   symbol: "TWD=X" },
+    { name: "人民幣 / 台幣", symbol: "CNYTWD=X" },
+    { name: "日圓 / 台幣",   symbol: "JPYTWD=X" },
+    { name: "韓元 / 台幣",   symbol: "KRWTWD=X" },
+  ]},
+  { id: "asia", name: "亞股指數", charts: [
+    { name: "日經 225", symbol: "^N225" },
+    { name: "韓國綜合", symbol: "^KS11" },
+    { name: "恆生指數", symbol: "^HSI" },
+    { name: "上證綜合", symbol: "000001.SS" },
+  ]},
+  { id: "us", name: "美股指數", charts: [
+    { name: "那斯達克綜合", symbol: "^IXIC" },
+    { name: "費城半導體",   symbol: "^SOX" },
+    { name: "道瓊工業",     symbol: "^DJI" },
+    { name: "S&P 500",      symbol: "^GSPC" },
+  ]},
+];
+// 週期 → Yahoo 的 interval 與抓取範圍
+const INTERVALS = [
+  { label: "5 分",  iv: "5m",  range: "5d",  bars: 90 },
+  { label: "15 分", iv: "15m", range: "5d",  bars: 90 },
+  { label: "60 分", iv: "60m", range: "1mo", bars: 120 },
+  { label: "日線",  iv: "1d",  range: "1y",  bars: 130 },
+  { label: "週線",  iv: "1wk", range: "5y",  bars: 130 },
+  { label: "月線",  iv: "1mo", range: "max", bars: 150 },
+];
+const REFRESH_MS = 60_000;
+
+const KEY = "watchboard-yahoo.v1";
+const load = () => { try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } };
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} };
+let state = load() || { groups: structuredClone(DEFAULT_GROUPS), current: "asia", iv: "5m" };
+if (!state.groups?.length) state.groups = structuredClone(DEFAULT_GROUPS);
+const fromHash = decodeURIComponent(location.hash.slice(1));
+if (fromHash && state.groups.some(g => g.id === fromHash)) state.current = fromHash;
+
+const $ = (id) => document.getElementById(id);
+const currentGroup = () => state.groups.find(g => g.id === state.current) || state.groups[0];
+const currentIv = () => INTERVALS.find(i => i.iv === state.iv) || INTERVALS[0];
+const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+const pad = (n) => String(n).padStart(2, "0");
+const TPE = 8 * 3600; // 台灣 UTC+8
+
+function taipeiClock(sec = Date.now() / 1000) {
+  const d = new Date((sec + TPE) * 1000);
+  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+
+// ---- 交易狀態：直接用 Yahoo 回傳的交易時段 ----
+const LUNCH = { // 當地時間
+  "Asia/Tokyo": "11:30-12:30", "Asia/Hong_Kong": "12:00-13:00", "Asia/Shanghai": "11:30-13:00",
+};
+function status(meta) {
+  const p = meta.currentTradingPeriod?.regular;
+  if (!p) return null;
+  const now = Date.now() / 1000;
+  if (now < p.start) return ["closed", "未開盤"];
+  if (now >= p.end) return ["closed", "已收盤"];
+  // Yahoo 不標午休，這裡用當地時間對照
+  const lunch = LUNCH[meta.exchangeTimezoneName];
+  if (lunch) {
+    const local = ((now + (meta.gmtoffset || 0)) % 86400 + 86400) % 86400 / 60;
+    const [a, b] = lunch.split("-").map(t => { const [h, m] = t.split(":"); return +h * 60 + +m; });
+    if (local >= a && local < b) return ["lunch", "午休"];
+  }
+  return ["open", "交易中"];
+}
+function sessionText(meta) {
+  const p = meta.currentTradingPeriod?.regular;
+  return p ? `台灣 ${taipeiClock(p.start)}–${taipeiClock(p.end)}` : "";
+}
+
+// ---- 抓資料 ----
+async function fetchChart(symbol, iv) {
+  const url = `${API}?symbol=${encodeURIComponent(symbol)}&interval=${iv.iv}&range=${iv.range}`;
+  const res = await fetch(url);
+  const j = await res.json();
+  const r = j.chart?.result?.[0];
+  if (!r) throw new Error(j.chart?.error?.description || j.error || `HTTP ${res.status}`);
+  const q = r.indicators.quote[0];
+  const daily = ["1d", "1wk", "1mo"].includes(iv.iv);
+  const off = r.meta.gmtoffset || 0;
+  const candles = [], volumes = [];
+  (r.timestamp || []).forEach((t, k) => {
+    if (q.open[k] == null || q.close[k] == null) return;
+    // 分鐘線：換成台灣時間顯示；日線以上：用交易所當地日期
+    const time = daily ? new Date((t + off) * 1000).toISOString().slice(0, 10) : t + TPE;
+    candles.push({ time, open: q.open[k], high: q.high[k], low: q.low[k], close: q.close[k] });
+    volumes.push({ time, value: q.volume?.[k] || 0, color: q.close[k] >= q.open[k] ? "rgba(38,166,154,.35)" : "rgba(239,83,80,.35)" });
+  });
+  // 同一時間只留最後一根（Yahoo 偶爾會重複最後一筆）
+  const dedupe = (arr) => arr.filter((x, k) => k === arr.length - 1 || arr[k + 1].time !== x.time);
+  return { meta: r.meta, candles: dedupe(candles), volumes: dedupe(volumes) };
+}
+
+// ---- 畫面 ----
+let charts = [];   // { chart, candle, volume, symbol, el }
+let timer = null;
+
+function renderBars() {
+  $("groups").innerHTML = "";
+  state.groups.forEach((g, n) => {
+    const b = document.createElement("button");
+    b.textContent = g.name;
+    if (n < 9) { b.dataset.key = n + 1; b.title = `按 ${n + 1} 切換`; }
+    if (g.id === currentGroup().id) b.className = "on";
+    b.onclick = () => switchTo(g);
+    $("groups").appendChild(b);
+  });
+  $("intervals").innerHTML = INTERVALS.map(i =>
+    `<button data-iv="${i.iv}" class="${i.iv === state.iv ? "on" : ""}">${i.label}</button>`).join("");
+}
+
+function render() {
+  renderBars();
+  charts.forEach(c => c.chart.remove());
+  charts = [];
+  const grid = $("grid");
+  grid.innerHTML = "";
+  if (!API) {
+    grid.style.display = "block";
+    grid.innerHTML = `<div class="setup"><b>還差一步：</b>請先部署 Cloudflare Worker，
+      再把網址填到這個檔案裡的 <code>const API = ""</code>。</div>`;
+    return;
+  }
+  const iv = currentIv();
+  currentGroup().charts.forEach(c => {
+    const cell = document.createElement("section");
+    cell.className = "cell";
+    cell.innerHTML = `<h2><span class="name"></span><span class="badge" hidden></span><span class="hint"></span></h2>
+      <div class="quote"><span class="px">—</span><span class="chg"></span><span class="upd"></span></div>
+      <div class="chart"><div class="msg">載入中…</div></div>`;
+    cell.querySelector(".name").textContent = c.name || c.symbol;
+    cell.querySelector(".hint").textContent = c.symbol;
+    grid.appendChild(cell);
+    const box = cell.querySelector(".chart");
+    const chart = LightweightCharts.createChart(box, {
+      autoSize: true,
+      layout: { background: { color: "transparent" }, textColor: dark ? "#93a0ad" : "#6b7785", fontSize: 11 },
+      grid: { vertLines: { color: dark ? "#1f2832" : "#f0f2f5" }, horzLines: { color: dark ? "#1f2832" : "#f0f2f5" } },
+      rightPriceScale: { borderVisible: false },
+      timeScale: { borderVisible: false, timeVisible: !["1d", "1wk", "1mo"].includes(iv.iv), secondsVisible: false },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    });
+    const candle = chart.addCandlestickSeries({
+      upColor: "#26a69a", downColor: "#ef5350", borderVisible: false, wickUpColor: "#26a69a", wickDownColor: "#ef5350",
+    });
+    const volume = chart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
+    chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    charts.push({ chart, candle, volume, symbol: c.symbol, cell, first: true });
+  });
+  refresh();
+  clearInterval(timer);
+  timer = setInterval(refresh, REFRESH_MS);
+}
+
+async function refresh() {
+  const iv = currentIv();
+  await Promise.all(charts.map(async (c) => {
+    const msg = c.cell.querySelector(".msg");
+    try {
+      const d = await fetchChart(c.symbol, iv);
+      if (msg) msg.remove();
+      const prec = d.meta.priceHint ?? 2;
+      c.candle.applyOptions({ priceFormat: { type: "price", precision: prec, minMove: 1 / 10 ** prec } });
+      c.candle.setData(d.candles);
+      const hasVol = d.volumes.some(v => v.value > 0);
+      c.volume.setData(hasVol ? d.volumes : []);
+      if (c.first) {
+        const n = d.candles.length;
+        c.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - iv.bars), to: n + 2 });
+        c.first = false;
+      }
+      // 報價列
+      const m = d.meta;
+      const px = m.regularMarketPrice;
+      const prev = m.previousClose ?? m.chartPreviousClose;
+      const pct = m.regularMarketChangePercent ?? (prev ? (px - prev) / prev * 100 : null);
+      c.cell.querySelector(".px").textContent = px?.toLocaleString("en-US", { maximumFractionDigits: prec, minimumFractionDigits: Math.min(prec, 2) });
+      const chg = c.cell.querySelector(".chg");
+      if (pct != null) { chg.textContent = `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`; chg.className = "chg " + (pct >= 0 ? "up" : "down"); }
+      c.cell.querySelector(".upd").textContent = `資料時間 ${taipeiClock(m.regularMarketTime)}`;
+      const st = status(m);
+      const badge = c.cell.querySelector(".badge");
+      if (st) { badge.hidden = false; badge.className = "badge " + st[0]; badge.textContent = st[1]; }
+      const name = m.shortName && m.shortName !== c.symbol ? `${c.symbol}｜` : "";
+      c.cell.querySelector(".hint").textContent = name + sessionText(m);
+    } catch (e) {
+      if (msg) msg.textContent = `抓不到資料：${e.message}`;
+    }
+  }));
+}
+
+function switchTo(g) { state.current = g.id; history.replaceState(null, "", "#" + g.id); save(); render(); }
+
+$("intervals").addEventListener("click", e => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  state.iv = b.dataset.iv; save(); render();
+});
+
+// 數字鍵 1–9 切換群組（在輸入框或編輯視窗裡打字時不作用）
+document.addEventListener("keydown", e => {
+  if (e.metaKey || e.ctrlKey || e.altKey || $("dlg").open) return;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  const n = parseInt(e.key, 10);
+  const g = n >= 1 && state.groups[n - 1];
+  if (g && g.id !== currentGroup().id) { e.preventDefault(); switchTo(g); }
+});
+
+// 分頁切回來時立刻更新一次
+document.addEventListener("visibilitychange", () => { if (!document.hidden && API) refresh(); });
+
+// ---- 編輯 / 新增群組 ----
+let editing = null;
+function openEditor(group) {
+  editing = group;
+  $("dlgTitle").textContent = group ? "編輯群組" : "新增群組";
+  $("gName").value = group ? group.name : "";
+  $("slots").innerHTML = "";
+  for (let i = 0; i < 4; i++) {
+    const c = (group && group.charts[i]) || {};
+    const row = document.createElement("div");
+    row.innerHTML = `<label>圖 ${i + 1}</label><div class="row">
+      <input class="sym" placeholder="代號，如 ^N225"><input class="lbl" placeholder="顯示名稱（選填）"></div>`;
+    row.querySelector(".sym").value = c.symbol || "";
+    row.querySelector(".lbl").value = c.name || "";
+    $("slots").appendChild(row);
+  }
+  $("delBtn").style.display = group && state.groups.length > 1 ? "" : "none";
+  $("resetBtn").style.display = group && DEFAULT_GROUPS.some(d => d.id === group.id) ? "" : "none";
+  $("dlg").showModal();
+}
+$("editBtn").onclick = () => openEditor(currentGroup());
+$("addBtn").onclick = () => openEditor(null);
+$("dlg").addEventListener("close", () => {
+  if ($("dlg").returnValue !== "ok") return;
+  const list = [...$("slots").children].map(row => ({
+    name: row.querySelector(".lbl").value.trim(),
+    symbol: row.querySelector(".sym").value.trim().toUpperCase(),
+  })).filter(c => c.symbol);
+  const name = $("gName").value.trim() || "未命名";
+  if (editing) { editing.name = name; editing.charts = list; }
+  else { const id = "g" + Date.now().toString(36); state.groups.push({ id, name, charts: list }); state.current = id; }
+  save(); render();
+});
+$("delBtn").onclick = () => {
+  state.groups = state.groups.filter(g => g !== editing);
+  state.current = state.groups[0].id;
+  $("dlg").close("cancel"); save(); render();
+};
+$("resetBtn").onclick = () => {
+  Object.assign(editing, structuredClone(DEFAULT_GROUPS.find(d => d.id === editing.id)));
+  $("dlg").close("cancel"); save(); render();
+};
+
+setInterval(() => { $("clock").textContent = "台灣 " + taipeiClock(); }, 1000);
+$("clock").textContent = "台灣 " + taipeiClock();
+render();
+</script>
+</body>
+</html>
