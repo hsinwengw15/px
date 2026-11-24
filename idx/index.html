@@ -29,7 +29,8 @@
   .quote { display: flex; align-items: baseline; gap: 10px; padding: 6px 12px 0; font-variant-numeric: tabular-nums; }
   .quote .px { font-size: 20px; font-weight: 600; }
   .quote .chg.up { color: var(--up); } .quote .chg.down { color: var(--down); }
-  .quote .upd { color: var(--muted); font-size: 12px; margin-left: auto; }
+  .quote .upd { color: var(--muted); font-size: 12px; margin-left: auto; white-space: nowrap; }
+  .quote .mas { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11px; }
   .badge { font-size: 11px; font-weight: 500; padding: 1px 7px; border-radius: 999px; color: #fff; }
   .badge.open { background: var(--open); } .badge.lunch { background: var(--lunch); } .badge.closed { background: var(--closed); }
   .chart { flex: 1; min-height: 0; position: relative; }
@@ -59,6 +60,8 @@
   <span class="sep"></span>
   <div class="bar" id="intervals"></div>
   <div class="right">
+    <button id="maBtn" title="顯示／隱藏移動平均線">均線</button>
+    <button id="colorBtn" title="切換 K 線顏色"></button>
     <button id="editBtn">編輯</button>
     <span class="clock" id="clock"></span>
   </div>
@@ -114,7 +117,8 @@ const DEFAULT_GROUPS = [
   ]},
   { id: "fx", name: "匯率", charts: [
     { name: "美金 / 台幣",   symbol: "TWD=X" },
-    { name: "人民幣 / 台幣", symbol: "CNYTWD=X" },
+    // Yahoo 的 CNYTWD=X 沒有日線歷史：日線以上改用 美元/台幣 ÷ 美元/人民幣 算交叉匯率
+    { name: "人民幣 / 台幣", symbol: "CNYTWD=X", cross: ["TWD=X", "CNY=X"] },
     { name: "日圓 / 台幣",   symbol: "JPYTWD=X" },
     { name: "韓元 / 台幣",   symbol: "KRWTWD=X" },
   ]},
@@ -137,6 +141,44 @@ let state = load() || { groups: structuredClone(DEFAULT_GROUPS), current: "tw", 
 if (!state.groups?.length) state.groups = structuredClone(DEFAULT_GROUPS);
 const fromHash = decodeURIComponent(location.hash.slice(1));
 if (fromHash && state.groups.some(g => g.id === fromHash)) state.current = fromHash;
+
+// 已存的設定裡的 CNYTWD=X 也補上交叉匯率（日線以上用）
+state.groups.forEach(g => g.charts.forEach(c => {
+  if (c.symbol === "CNYTWD=X") c.cross = ["TWD=X", "CNY=X"];
+}));
+if (state.redUp === undefined) state.redUp = true;
+if (state.ma === undefined) state.ma = true;
+
+// 移動平均線：以「目前週期的 K 棒」計算（日線上 MA5 = 5 日線；5 分線上 = 5 根 5 分 K）
+const MAS = [
+  { n: 5,  color: "#f59e0b" },  // 5 日線（週線）
+  { n: 10, color: "#3b82f6" },  // 10 日線
+  { n: 20, color: "#a855f7" },  // 20 日線（月線）
+  { n: 60, color: "#14b8a6" },  // 60 日線（季線）
+];
+function sma(candles, n) {
+  const out = [];
+  let sum = 0;
+  candles.forEach((c, i) => {
+    sum += c.close;
+    if (i >= n) sum -= candles[i - n].close;
+    if (i >= n - 1) out.push({ time: c.time, value: sum / n });
+  });
+  return out;
+} // 預設台股習慣：紅漲綠跌
+
+// K 線顏色
+const RED = "#ef5350", GREEN = "#26a69a";
+const upColor = () => state.redUp ? RED : GREEN;
+const downColor = () => state.redUp ? GREEN : RED;
+function applyColorMode() {
+  document.documentElement.style.setProperty("--up", upColor());
+  document.documentElement.style.setProperty("--down", downColor());
+  $("colorBtn").innerHTML = state.redUp
+    ? '<span style="color:#ef5350">紅漲</span><span style="color:#26a69a">綠跌</span>'
+    : '<span style="color:#26a69a">綠漲</span><span style="color:#ef5350">紅跌</span>';
+}
+const hexA = (hex, a) => `rgba(${parseInt(hex.slice(1, 3), 16)},${parseInt(hex.slice(3, 5), 16)},${parseInt(hex.slice(5, 7), 16)},${a})`;
 
 const $ = (id) => document.getElementById(id);
 const currentGroup = () => state.groups.find(g => g.id === state.current) || state.groups[0];
@@ -175,7 +217,35 @@ function sessionText(meta) {
 }
 
 // ---- 抓資料 ----
-async function fetchChart(symbol, iv) {
+// 交叉匯率：A ÷ B（例如 美元/台幣 ÷ 美元/人民幣 = 人民幣/台幣），依時間對齊
+async function fetchCross([a, b], iv) {
+  const [da, db] = await Promise.all([fetchRaw(a, iv), fetchRaw(b, iv)]);
+  const mb = new Map(db.candles.map(c => [c.time, c]));
+  const candles = [];
+  da.candles.forEach(x => {
+    const y = mb.get(x.time);
+    if (!y) return;
+    const open = x.open / y.open, close = x.close / y.close;
+    candles.push({ time: x.time, open, close,
+      high: Math.max(open, close, x.high / y.high), low: Math.min(open, close, x.low / y.low) });
+  });
+  const ma = da.meta, mbm = db.meta;
+  const pa = ma.regularMarketChangePercent, pb = mbm.regularMarketChangePercent;
+  const meta = { ...ma,
+    regularMarketPrice: ma.regularMarketPrice / mbm.regularMarketPrice,
+    regularMarketChangePercent: pa != null && pb != null ? ((1 + pa / 100) / (1 + pb / 100) - 1) * 100 : null,
+    previousClose: undefined, chartPreviousClose: undefined,
+    regularMarketTime: Math.min(ma.regularMarketTime, mbm.regularMarketTime), priceHint: 4 };
+  return { meta, candles, volumes: [] };
+}
+
+async function fetchChart(c, iv) {
+  const daily = ["1d", "1wk", "1mo"].includes(iv.iv);
+  if (c.cross && daily) return fetchCross(c.cross, iv);
+  return fetchRaw(c.symbol, iv);
+}
+
+async function fetchRaw(symbol, iv) {
   const url = `${API}?symbol=${encodeURIComponent(symbol)}&interval=${iv.iv}&range=${iv.range}`;
   const res = await fetch(url);
   const j = await res.json();
@@ -190,7 +260,7 @@ async function fetchChart(symbol, iv) {
     // 分鐘線：換成台灣時間顯示；日線以上：用交易所當地日期
     const time = daily ? new Date((t + off) * 1000).toISOString().slice(0, 10) : t + TPE;
     candles.push({ time, open: q.open[k], high: q.high[k], low: q.low[k], close: q.close[k] });
-    volumes.push({ time, value: q.volume?.[k] || 0, color: q.close[k] >= q.open[k] ? "rgba(38,166,154,.35)" : "rgba(239,83,80,.35)" });
+    volumes.push({ time, value: q.volume?.[k] || 0, up: q.close[k] >= q.open[k] });
   });
   // 同一時間只留最後一根（Yahoo 偶爾會重複最後一筆）
   const dedupe = (arr) => arr.filter((x, k) => k === arr.length - 1 || arr[k + 1].time !== x.time);
@@ -239,7 +309,7 @@ function render() {
     const cell = document.createElement("section");
     cell.className = "cell";
     cell.innerHTML = `<h2><span class="name"></span><span class="badge" hidden></span><span class="hint"></span></h2>
-      <div class="quote"><span class="px">—</span><span class="chg"></span><span class="upd"></span></div>
+      <div class="quote"><span class="px">—</span><span class="chg"></span><span class="mas"></span><span class="upd"></span></div>
       <div class="chart"><div class="msg">載入中…</div></div>`;
     cell.querySelector(".name").textContent = c.name || c.symbol;
     cell.querySelector(".hint").textContent = c.symbol;
@@ -254,11 +324,13 @@ function render() {
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     });
     const candle = chart.addCandlestickSeries({
-      upColor: "#26a69a", downColor: "#ef5350", borderVisible: false, wickUpColor: "#26a69a", wickDownColor: "#ef5350",
+      upColor: upColor(), downColor: downColor(), borderVisible: false, wickUpColor: upColor(), wickDownColor: downColor(),
     });
     const volume = chart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
     chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-    charts.push({ chart, candle, volume, symbol: c.symbol, cell, first: true });
+    const maLines = MAS.map(m => chart.addLineSeries({ color: m.color, lineWidth: 1,
+      priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }));
+    charts.push({ chart, candle, volume, maLines, symbol: c.symbol, cross: c.cross, cell, first: true });
   });
   refresh();
   clearInterval(timer);
@@ -270,13 +342,27 @@ async function refresh() {
   await Promise.all(charts.map(async (c) => {
     const msg = c.cell.querySelector(".msg");
     try {
-      const d = await fetchChart(c.symbol, iv);
+      const d = await fetchChart(c, iv);
       if (msg) msg.remove();
       const prec = d.meta.priceHint ?? 2;
       c.candle.applyOptions({ priceFormat: { type: "price", precision: prec, minMove: 1 / 10 ** prec } });
       c.candle.setData(d.candles);
+      // 均線
+      const masBox = c.cell.querySelector(".mas");
+      masBox.innerHTML = "";
+      MAS.forEach((m, k) => {
+        const line = state.ma ? sma(d.candles, m.n) : [];
+        c.maLines[k].setData(line);
+        if (line.length) {
+          const s = document.createElement("span");
+          s.style.color = m.color;
+          s.textContent = `MA${m.n} ${line.at(-1).value.toFixed(prec)}`;
+          masBox.appendChild(s);
+        }
+      });
       const hasVol = d.volumes.some(v => v.value > 0);
-      c.volume.setData(hasVol ? d.volumes : []);
+      c.volume.setData(hasVol ? d.volumes.map(v => ({ time: v.time, value: v.value,
+        color: hexA(v.up ? upColor() : downColor(), 0.35) })) : []);
       if (c.first) {
         const n = d.candles.length;
         c.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - iv.bars), to: n + 2 });
@@ -294,7 +380,8 @@ async function refresh() {
       const st = status(m);
       const badge = c.cell.querySelector(".badge");
       if (st) { badge.hidden = false; badge.className = "badge " + st[0]; badge.textContent = st[1]; }
-      const name = m.shortName && m.shortName !== c.symbol ? `${c.symbol}｜` : "";
+      const crossed = c.cross && ["1d", "1wk", "1mo"].includes(iv.iv);
+      const name = crossed ? `${c.cross[0]} ÷ ${c.cross[1]}｜` : m.shortName && m.shortName !== c.symbol ? `${c.symbol}｜` : "";
       c.cell.querySelector(".hint").textContent = name + sessionText(m);
     } catch (e) {
       if (msg) msg.textContent = `抓不到資料：${e.message}`;
@@ -311,6 +398,11 @@ function moveGroup(from, to) {
 }
 
 function switchTo(g) { state.current = g.id; history.replaceState(null, "", "#" + g.id); save(); render(); }
+
+function applyMaBtn() { $("maBtn").className = state.ma ? "on" : ""; }
+$("maBtn").onclick = () => { state.ma = !state.ma; save(); applyMaBtn(); refresh(); };
+
+$("colorBtn").onclick = () => { state.redUp = !state.redUp; save(); applyColorMode(); render(); };
 
 $("intervals").addEventListener("click", e => {
   const b = e.target.closest("button");
@@ -366,10 +458,11 @@ $("editBtn").onclick = () => openEditor(currentGroup());
 $("addBtn").onclick = () => openEditor(null);
 $("dlg").addEventListener("close", () => {
   if ($("dlg").returnValue !== "ok") return;
-  const list = [...$("slots").children].map(row => ({
-    name: row.querySelector(".lbl").value.trim(),
-    symbol: row.querySelector(".sym").value.trim().toUpperCase(),
-  })).filter(c => c.symbol);
+  const list = [...$("slots").children].map((row, i) => {
+    const c = { name: row.querySelector(".lbl").value.trim(), symbol: row.querySelector(".sym").value.trim().toUpperCase() };
+    if (c.symbol === "CNYTWD=X") c.cross = ["TWD=X", "CNY=X"];
+    return c;
+  }).filter(c => c.symbol);
   const name = $("gName").value.trim() || "未命名";
   if (editing) { editing.name = name; editing.charts = list; }
   else { const id = "g" + Date.now().toString(36); state.groups.push({ id, name, charts: list }); state.current = id; }
@@ -387,6 +480,8 @@ $("resetBtn").onclick = () => {
 
 setInterval(() => { $("clock").textContent = "台灣 " + taipeiClock(); }, 1000);
 $("clock").textContent = "台灣 " + taipeiClock();
+applyColorMode();
+applyMaBtn();
 render();
 </script>
 </body>
