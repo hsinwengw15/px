@@ -3,95 +3,291 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>台幣匯率四格看盤</title>
+<title>四格看盤</title>
 <style>
-  :root { color-scheme: light dark; --bg:#f4f5f7; --card:#ffffff; --ink:#15202b; --muted:#6b7785; --line:#dde1e6; --accent:#d6127e; }
+  :root { color-scheme: light dark; --bg:#f4f5f7; --card:#ffffff; --ink:#15202b; --muted:#6b7785; --line:#dde1e6; --accent:#d6127e;
+          --open:#16a34a; --lunch:#d97706; --closed:#9ca3af; }
   @media (prefers-color-scheme: dark) { :root { --bg:#0f141a; --card:#171e26; --ink:#e8edf2; --muted:#93a0ad; --line:#26313c; } }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body { background: var(--bg); color: var(--ink); font: 14px/1.4 -apple-system, "PingFang TC", "Helvetica Neue", sans-serif; display: flex; flex-direction: column; }
-  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 14px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 14px; }
   h1 { font-size: 17px; margin: 0; font-weight: 700; }
   .bar { display: flex; gap: 6px; flex-wrap: wrap; }
-  .bar button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
-  .bar button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .note { color: var(--muted); font-size: 12px; margin-left: auto; }
+  button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button[data-key]::before { content: attr(data-key); font-size: 11px; opacity: .55; margin-right: 5px; }
+  @media (hover: none) { button[data-key]::before { display: none; } }
+  .sep { width: 1px; height: 24px; background: var(--line); }
+  .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .clock { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
   main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 8px; padding: 0 8px 8px; min-height: 0; }
   .cell { background: var(--card); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
-  .cell h2 { font-size: 14px; margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; }
-  .cell h2 span { color: var(--muted); font-weight: 400; }
+  .cell h2 { font-size: 14px; margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+  .cell h2 .hint { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: auto; text-align: right; }
+  .badge { font-size: 11px; font-weight: 500; padding: 1px 7px; border-radius: 999px; color: #fff; }
+  .badge.open { background: var(--open); } .badge.lunch { background: var(--lunch); } .badge.closed { background: var(--closed); }
   .chart { flex: 1; min-height: 0; }
-  @media (max-width: 800px) { main { grid-template-columns: 1fr; grid-template-rows: none; grid-auto-rows: 420px; } .note { margin-left: 0; } }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; grid-template-rows: none; grid-auto-rows: 420px; } .right { margin-left: 0; } }
+  dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink); width: min(460px, 92vw); }
+  dialog::backdrop { background: rgba(0,0,0,.35); }
+  dialog label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  dialog input { width: 100%; font: inherit; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .actions { display: flex; gap: 8px; margin-top: 16px; }
+  .actions .danger { color: #dc2626; margin-right: auto; }
+  .tip { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
 </style>
 </head>
 <body>
 <header>
-  <h1>台幣匯率四格看盤</h1>
-  <div class="bar" id="bar"></div>
-  <div class="note">數字為「1 外幣 = 多少台幣」的國際報價，非銀行牌告買賣價</div>
+  <h1>四格看盤</h1>
+  <div class="bar" id="groups"></div>
+  <button id="addBtn" title="新增群組">＋</button>
+  <span class="sep"></span>
+  <div class="bar" id="intervals"></div>
+  <div class="right">
+    <button id="editBtn">編輯</button>
+    <span class="clock" id="clock"></span>
+  </div>
 </header>
 <main id="grid"></main>
 
+<dialog id="dlg">
+  <form method="dialog">
+    <strong id="dlgTitle">編輯群組</strong>
+    <label>群組名稱</label>
+    <input id="gName" required>
+    <div id="slots"></div>
+    <p class="tip">代號用 TradingView 格式，例如 FOREXCOM:JP225、FX_IDC:USDTWD。<br>
+      免費 widget 會擋很多交易所的原始資料（台股、韓股、NASDAQ 指數等），
+      FOREXCOM:、CAPITALCOM:、FX_IDC: 開頭的通常可以。</p>
+    <div class="actions">
+      <button type="button" class="danger" id="delBtn">刪除群組</button>
+      <button type="button" id="resetBtn">還原預設</button>
+      <button value="cancel" formnovalidate>取消</button>
+      <button value="ok">儲存</button>
+    </div>
+  </form>
+</dialog>
+
 <script src="https://s3.tradingview.com/tv.js"></script>
 <script>
-{
-  // 想換幣別：改這裡的 symbol 即可（格式 FX_IDC:外幣代碼TWD）
-  const PAIRS = [
-    { name: '美金 / 台幣',   symbol: 'FX_IDC:USDTWD', hint: 'USD/TWD' },
-    { name: '人民幣 / 台幣', symbol: 'FX_IDC:CNYTWD', hint: 'CNY/TWD' },
-    { name: '日圓 / 台幣',   symbol: 'FX_IDC:JPYTWD', hint: 'JPY/TWD' },
-    { name: '韓元 / 台幣',   symbol: 'FX_IDC:KRWTWD', hint: 'KRW/TWD' },
-  ];
-  const INTERVALS = [
-    { label: '60 分', v: '60' },
-    { label: '日線', v: 'D' },
-    { label: '週線', v: 'W' },
-    { label: '月線', v: 'M' },
-  ];
+// 每張圖：
+//   symbol = 分鐘線用的代號（要有盤中資料）
+//   daily  = 日／週／月線改用的官方指數（選填；免費 widget 只給官方指數收盤資料）
+//   hours / tz = 交易時間（當地時間）與時區，畫面上會自動換算成台灣時間
+const DEFAULT_GROUPS = [
+  { id: "fx", name: "匯率", charts: [
+    { name: "美金 / 台幣",   symbol: "FX_IDC:USDTWD" },
+    { name: "人民幣 / 台幣", symbol: "FX_IDC:CNYTWD" },
+    { name: "日圓 / 台幣",   symbol: "FX_IDC:JPYTWD" },
+    { name: "韓元 / 台幣",   symbol: "FX_IDC:KRWTWD" },
+  ]},
+  { id: "asia", name: "亞股指數", charts: [
+    { name: "日經 225", symbol: "FOREXCOM:JP225",  daily: "INDEX:NKY",  hours: "09:00-11:30,12:30-15:30", tz: "Asia/Tokyo" },
+    { name: "韓國綜合", symbol: "",                daily: "INDEX:KSIC", hours: "09:00-15:30", tz: "Asia/Seoul" },
+    { name: "恆生指數", symbol: "FOREXCOM:HKXHKD", daily: "INDEX:HSI",  hours: "09:30-12:00,13:00-16:00", tz: "Asia/Hong_Kong" },
+    { name: "上證綜合", symbol: "CAPITALCOM:CN50", daily: "SSE:000001", hours: "09:30-11:30,13:00-15:00", tz: "Asia/Shanghai" },
+  ]},
+  { id: "us", name: "美股指數", charts: [
+    { name: "那斯達克 100", symbol: "FOREXCOM:NSXUSD", hours: "09:30-16:00", tz: "America/New_York" },
+    { name: "費半 ETF",     symbol: "NASDAQ:SOXX",     hours: "09:30-16:00", tz: "America/New_York" },
+    { name: "道瓊工業",     symbol: "FOREXCOM:DJI",    hours: "09:30-16:00", tz: "America/New_York" },
+    { name: "S&P 500",      symbol: "FOREXCOM:SPXUSD", hours: "09:30-16:00", tz: "America/New_York" },
+  ]},
+];
+const INTERVALS = [
+  { label: "5 分", v: "5" }, { label: "15 分", v: "15" }, { label: "60 分", v: "60" },
+  { label: "日線", v: "D" }, { label: "週線", v: "W" }, { label: "月線", v: "M" },
+];
+const isDaily = (v) => ["D", "W", "M"].includes(v);
 
-  let interval = 'D';
-  try { interval = localStorage.getItem('twdfx-interval') || 'D'; } catch (e) {}
+// 各代號實際是什麼（顯示在每格右上角）
+const NOTES = {
+  "FOREXCOM:JP225": "JP225 差價合約", "INDEX:NKY": "官方指數・收盤資料",
+  "INDEX:KSIC": "官方指數・收盤資料", "FOREXCOM:HKXHKD": "HK50 差價合約", "INDEX:HSI": "官方指數・收盤資料",
+  "CAPITALCOM:CN50": "富時中國 A50 差價合約", "SSE:000001": "官方指數・收盤資料",
+  "FOREXCOM:NSXUSD": "NAS100 差價合約", "NASDAQ:SOXX": "iShares 半導體 ETF・延遲 15 分",
+  "FOREXCOM:DJI": "US30 差價合約", "FOREXCOM:SPXUSD": "SPX500 差價合約",
+};
 
-  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const grid = document.getElementById('grid');
-  const bar = document.getElementById('bar');
+const KEY = "watchboard.v5";
+const load = () => { try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } };
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} };
+let state = load() || { groups: structuredClone(DEFAULT_GROUPS), current: "fx", interval: "D" };
+if (!state.groups?.length) state.groups = structuredClone(DEFAULT_GROUPS);
 
-  function render() {
-    bar.innerHTML = INTERVALS.map(i =>
-      `<button data-v="${i.v}" class="${i.v === interval ? 'on' : ''}">${i.label}</button>`).join('');
-    grid.innerHTML = PAIRS.map((p, i) =>
-      `<section class="cell"><h2>${p.name}<span>${p.hint}</span></h2><div class="chart" id="c${i}"></div></section>`).join('');
-    if (!window.TradingView) {
-      grid.innerHTML = '<p style="padding:16px">圖表載入失敗，請確認有連上網路後重新整理。</p>';
-      return;
-    }
-    PAIRS.forEach((p, i) => {
-      new TradingView.widget({
-        container_id: 'c' + i,
-        autosize: true,
-        symbol: p.symbol,
-        interval: interval,
-        timezone: 'Asia/Taipei',
-        theme: dark ? 'dark' : 'light',
-        style: '1',
-        locale: 'zh_TW',
-        hide_side_toolbar: true,
-        allow_symbol_change: true,
-        save_image: false,
-      });
-    });
-  }
+// 網址可指定群組：fx.pickyabit.com/#asia、#us
+const fromHash = decodeURIComponent(location.hash.slice(1));
+if (fromHash && state.groups.some(g => g.id === fromHash)) state.current = fromHash;
 
-  bar.addEventListener('click', e => {
-    const b = e.target.closest('button');
-    if (!b) return;
-    interval = b.dataset.v;
-    try { localStorage.setItem('twdfx-interval', interval); } catch (e) {}
-    render();
-  });
+const $ = (id) => document.getElementById(id);
+const currentGroup = () => state.groups.find(g => g.id === state.current) || state.groups[0];
+const dark = matchMedia("(prefers-color-scheme: dark)").matches;
 
-  render();
+// ---- 時間 ----
+const H = (s) => s.split(",").map(r => r.split("-").map(t => { const [h, m] = t.split(":"); return +h * 60 + +m; }));
+const pad = (n) => String(n).padStart(2, "0");
+function nowIn(tz = "Asia/Taipei") {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: tz, weekday: "short", hour: "2-digit",
+    minute: "2-digit", hour12: false, timeZoneName: "longOffset" }).formatToParts(new Date());
+  const get = (t) => parts.find(p => p.type === t).value;
+  const h = +get("hour") % 24, m = +get("minute");
+  const off = get("timeZoneName").match(/GMT([+-])(\d\d):?(\d\d)?/);
+  const offset = off ? (off[1] === "-" ? -1 : 1) * (+off[2] * 60 + +(off[3] || 0)) : 0;
+  return { day: get("weekday"), min: h * 60 + m, offset, text: `${pad(h)}:${pad(m)}` };
 }
+function hoursInTaipei(hours, tz) {
+  const diff = 480 - nowIn(tz).offset;
+  const f = (x) => { x = ((x + diff) % 1440 + 1440) % 1440; return `${pad(Math.floor(x / 60))}:${pad(x % 60)}`; };
+  return H(hours).map(([a, b]) => `${f(a)}–${f(b)}`).join(" ");
+}
+function status(hours, tz) {
+  if (!hours) return null;
+  const { day, min } = nowIn(tz);
+  if (day === "Sat" || day === "Sun") return ["closed", "休市"];
+  const segs = H(hours);
+  if (segs.some(([a, b]) => min >= a && min < b)) return ["open", "交易中"];
+  if (min > segs[0][0] && min < segs.at(-1)[1]) return ["lunch", "午休"];
+  return ["closed", min < segs[0][0] ? "未開盤" : "已收盤"];
+}
+
+// ---- 畫面 ----
+function pick(c) {
+  // 回傳 [代號, 週期]
+  if (isDaily(state.interval) && c.daily) return [c.daily, state.interval];
+  if (c.symbol) return [c.symbol, state.interval];
+  return [c.daily, "D"]; // 沒有分鐘線資料（例如韓股），固定顯示日線
+}
+
+function render() {
+  $("groups").innerHTML = "";
+  state.groups.forEach((g, n) => {
+    const b = document.createElement("button");
+    b.textContent = g.name;
+    if (n < 9) { b.dataset.key = n + 1; b.title = `按 ${n + 1} 切換`; }
+    if (g.id === currentGroup().id) b.className = "on";
+    b.onclick = () => { state.current = g.id; history.replaceState(null, "", "#" + g.id); save(); render(); };
+    $("groups").appendChild(b);
+  });
+  $("intervals").innerHTML = INTERVALS.map(i =>
+    `<button data-v="${i.v}" class="${i.v === state.interval ? "on" : ""}">${i.label}</button>`).join("");
+
+  const grid = $("grid");
+  grid.innerHTML = "";
+  if (!window.TradingView) {
+    grid.innerHTML = '<p style="padding:16px">圖表載入失敗，請確認有連上網路後重新整理。</p>';
+    return;
+  }
+  currentGroup().charts.forEach((c, i) => {
+    const [sym, iv] = pick(c);
+    const st = status(c.hours, c.tz);
+    const cell = document.createElement("section");
+    cell.className = "cell";
+    cell.innerHTML = `<h2><span class="name"></span>
+      ${st ? `<span class="badge ${st[0]}" data-hours="${c.hours}" data-tz="${c.tz}">${st[1]}</span>` : ""}
+      <span class="hint"></span></h2><div class="chart" id="c${i}"></div>`;
+    cell.querySelector(".name").textContent = c.name || sym;
+    const bits = [];
+    if (NOTES[sym]) bits.push(NOTES[sym]);
+    if (iv !== state.interval) bits.push("只有日線");
+    if (c.hours) bits.push("台灣 " + hoursInTaipei(c.hours, c.tz));
+    cell.querySelector(".hint").textContent = bits.join("｜") || sym;
+    grid.appendChild(cell);
+    if (!sym) return;
+    new TradingView.widget({
+      container_id: "c" + i, autosize: true, symbol: sym, interval: iv,
+      timezone: "Asia/Taipei", theme: dark ? "dark" : "light", style: "1", locale: "zh_TW",
+      hide_side_toolbar: true, allow_symbol_change: true, save_image: false,
+    });
+  });
+}
+
+$("intervals").addEventListener("click", e => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  state.interval = b.dataset.v; save(); render();
+});
+
+// 數字鍵 1–9 切換群組（在輸入框或編輯視窗裡打字時不作用）
+function switchTo(g) { state.current = g.id; history.replaceState(null, "", "#" + g.id); save(); render(); }
+document.addEventListener("keydown", e => {
+  if (e.metaKey || e.ctrlKey || e.altKey || $("dlg").open) return;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  const n = parseInt(e.key, 10);
+  const g = n >= 1 && state.groups[n - 1];
+  if (g && g.id !== currentGroup().id) { e.preventDefault(); switchTo(g); }
+});
+// 點進 TradingView 圖表後鍵盤會被圖表吃掉；滑鼠移出圖表就把焦點拿回頁面
+$("grid").addEventListener("mouseleave", () => {
+  if (document.activeElement?.tagName === "IFRAME") document.activeElement.blur();
+});
+
+function tick() {
+  $("clock").textContent = "台灣 " + nowIn().text;
+  document.querySelectorAll(".badge[data-hours]").forEach(b => {
+    const st = status(b.dataset.hours, b.dataset.tz);
+    b.className = "badge " + st[0]; b.textContent = st[1];
+  });
+}
+
+// ---- 編輯 / 新增群組 ----
+let editing = null;
+function openEditor(group) {
+  editing = group;
+  $("dlgTitle").textContent = group ? "編輯群組" : "新增群組";
+  $("gName").value = group ? group.name : "";
+  $("slots").innerHTML = "";
+  for (let i = 0; i < 4; i++) {
+    const c = (group && group.charts[i]) || {};
+    const row = document.createElement("div");
+    row.innerHTML = `<label>圖 ${i + 1}</label><div class="row">
+      <input class="sym" placeholder="代號，如 FOREXCOM:JP225">
+      <input class="lbl" placeholder="顯示名稱（選填）"></div>`;
+    row.querySelector(".sym").value = c.symbol || c.daily || "";
+    row.querySelector(".lbl").value = c.name || "";
+    $("slots").appendChild(row);
+  }
+  $("delBtn").style.display = group && state.groups.length > 1 ? "" : "none";
+  $("resetBtn").style.display = group && DEFAULT_GROUPS.some(d => d.id === group.id) ? "" : "none";
+  $("dlg").showModal();
+}
+$("editBtn").onclick = () => openEditor(currentGroup());
+$("addBtn").onclick = () => openEditor(null);
+
+$("dlg").addEventListener("close", () => {
+  if ($("dlg").returnValue !== "ok") return;
+  const charts = [...$("slots").children].map((row, i) => {
+    const code = row.querySelector(".sym").value.trim().toUpperCase();
+    const name = row.querySelector(".lbl").value.trim();
+    const prev = editing?.charts[i];
+    // 代號沒改就保留原本的日線代號與交易時間
+    if (prev && code && (code === prev.symbol || code === prev.daily)) return { ...prev, name };
+    return { name, symbol: code };
+  }).filter(c => c.symbol || c.daily);
+  const name = $("gName").value.trim() || "未命名";
+  if (editing) { editing.name = name; editing.charts = charts; }
+  else {
+    const id = "g" + Date.now().toString(36);
+    state.groups.push({ id, name, charts });
+    state.current = id;
+  }
+  save(); render();
+});
+$("delBtn").onclick = () => {
+  state.groups = state.groups.filter(g => g !== editing);
+  state.current = state.groups[0].id;
+  $("dlg").close("cancel"); save(); render();
+};
+$("resetBtn").onclick = () => {
+  Object.assign(editing, structuredClone(DEFAULT_GROUPS.find(d => d.id === editing.id)));
+  $("dlg").close("cancel"); save(); render();
+};
+
+render();
+tick();
+setInterval(tick, 30000);
 </script>
 </body>
 </html>
