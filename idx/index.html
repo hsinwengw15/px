@@ -81,7 +81,8 @@
     <div id="slots"></div>
     <p class="tip">代號用 Yahoo Finance 格式：<br>
       指數 ^N225、^KS11、^HSI、000001.SS、^TWII（台股加權）、^IXIC、^SOX<br>
-      台股 2330.TW、上櫃 6488.TWO、美股 NVDA、匯率 TWD=X（美元/台幣）、JPYTWD=X</p>
+      台股 2330.TW、上櫃 6488.TWO、美股 NVDA、匯率 TWD=X（美元/台幣）、JPYTWD=X<br>
+      特殊面板：@MARGIN（上市融資維持率）、@FNG（CNN 恐懼貪婪指數）、^VIX（VIX）</p>
     <div class="actions">
       <button type="button" class="danger" id="delBtn">刪除群組</button>
       <button type="button" id="resetBtn">還原預設</button>
@@ -95,6 +96,16 @@
 <script>
 // ★ 部署好 Cloudflare Worker 之後，把網址貼在這裡
 const API = "https://quote-proxy.cindywengw15.workers.dev/";
+
+// 特殊面板：代號以 @ 開頭（@MARGIN 上市融資維持率、@FNG CNN 恐懼貪婪指數）
+function MOOD_CHARTS() {
+  return [
+    { name: "上市融資維持率", symbol: "@MARGIN" },
+    { name: "VIX 恐慌指數", symbol: "^VIX" },
+    { name: "CNN 恐懼貪婪指數", symbol: "@FNG" },
+    { name: "加權指數", symbol: "^TWII" },
+  ];
+}
 
 const DEFAULT_GROUPS = [
   { id: "tw", name: "台股", charts: [
@@ -115,6 +126,7 @@ const DEFAULT_GROUPS = [
     { name: "道瓊工業",     symbol: "^DJI" },
     { name: "S&P 500",      symbol: "^GSPC" },
   ]},
+  { id: "mood", name: "市場情緒", charts: MOOD_CHARTS() },
   { id: "fx", name: "匯率", charts: [
     { name: "美金 / 台幣",   symbol: "TWD=X" },
     // Yahoo 的 CNYTWD=X 沒有日線歷史：日線以上改用 美元/台幣 ÷ 美元/人民幣 算交叉匯率
@@ -146,6 +158,12 @@ if (fromHash && state.groups.some(g => g.id === fromHash)) state.current = fromH
 state.groups.forEach(g => g.charts.forEach(c => {
   if (c.symbol === "CNYTWD=X") c.cross = ["TWD=X", "CNY=X"];
 }));
+// 舊設定補上「市場情緒」群組（只補一次；之後刪掉也不會再出現）
+if (!state.moodAdded) {
+  if (!state.groups.some(g => g.id === "mood")) state.groups.push({ id: "mood", name: "市場情緒", charts: MOOD_CHARTS() });
+  state.moodAdded = true;
+  save();
+}
 if (state.redUp === undefined) state.redUp = true;
 if (state.ma === undefined) state.ma = true;
 
@@ -315,6 +333,7 @@ function render() {
     cell.querySelector(".hint").textContent = c.symbol;
     grid.appendChild(cell);
     const box = cell.querySelector(".chart");
+    if (c.symbol.startsWith("@")) { charts.push(createSpecial(c, cell, box)); return; }
     const chart = LightweightCharts.createChart(box, {
       autoSize: true,
       layout: { background: { color: "transparent" }, textColor: dark ? "#93a0ad" : "#6b7785", fontSize: 11 },
@@ -341,6 +360,7 @@ async function refresh() {
   const iv = currentIv();
   await Promise.all(charts.map(async (c) => {
     const msg = c.cell.querySelector(".msg");
+    if (c.special) return refreshSpecial(c);
     try {
       const d = await fetchChart(c, iv);
       if (msg) msg.remove();
@@ -387,6 +407,154 @@ async function refresh() {
       if (msg) msg.textContent = `抓不到資料：${e.message}`;
     }
   }));
+}
+
+// ================= 特殊面板 =================
+const SPECIAL = {
+  "@MARGIN": { hint: "證交所資料計算｜每日收盤後更新",
+    lines: [[166.7, "166 原始水準"], [140, "140"], [130, "130 追繳線"]] },
+  "@FNG": { hint: "CNN Business｜0 極度恐懼 ～ 100 極度貪婪",
+    lines: [[75, "75"], [55, "55"], [45, "45"], [25, "25"]], range: [0, 100] },
+};
+const FNG_RATING = {
+  "extreme fear": ["極度恐懼", "#dc2626"], "fear": ["恐懼", "#f97316"], "neutral": ["中性", "#9ca3af"],
+  "greed": ["貪婪", "#65a30d"], "extreme greed": ["極度貪婪", "#16a34a"],
+};
+
+function createSpecial(c, cell, box) {
+  const def = SPECIAL[c.symbol];
+  if (!def) { box.querySelector(".msg").textContent = `不認得的特殊代號：${c.symbol}（可用 @MARGIN、@FNG）`; return { special: "?", cell, chart: { remove() {} } }; }
+  cell.querySelector(".hint").textContent = def.hint;
+  const chart = LightweightCharts.createChart(box, {
+    autoSize: true,
+    layout: { background: { color: "transparent" }, textColor: dark ? "#93a0ad" : "#6b7785", fontSize: 11 },
+    grid: { vertLines: { color: dark ? "#1f2832" : "#f0f2f5" }, horzLines: { color: dark ? "#1f2832" : "#f0f2f5" } },
+    rightPriceScale: { borderVisible: false }, timeScale: { borderVisible: false },
+  });
+  const line = chart.addLineSeries({ color: "#d6127e", lineWidth: 2, priceLineVisible: false,
+    ...(def.range ? { autoscaleInfoProvider: () => ({ priceRange: { minValue: def.range[0], maxValue: def.range[1] } }) } : {}) });
+  def.lines.forEach(([price, title]) => line.createPriceLine({ price, title, color: dark ? "#3b4652" : "#c4cad1",
+    lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true }));
+  return { special: c.symbol, chart, line, cell, first: true };
+}
+
+async function refreshSpecial(c) {
+  if (c.special === "@FNG") return refreshFng(c);
+  if (c.special === "@MARGIN") return refreshMargin(c);
+}
+
+const ymdDash = (d) => `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+function setBadge(c, text, color) {
+  const b = c.cell.querySelector(".badge");
+  b.hidden = false; b.className = "badge"; b.style.background = color; b.textContent = text;
+}
+function setMsg(c, text) {
+  const msg = c.cell.querySelector(".msg");
+  if (msg) msg.textContent = text;
+}
+function clearMsg(c) { c.cell.querySelector(".msg")?.remove(); }
+
+// ---- CNN 恐懼貪婪指數 ----
+async function refreshFng(c) {
+  try {
+    const j = await fetch(`${API}?src=fng`).then(r => r.json());
+    if (j.score == null) throw new Error(j.error || "沒有資料");
+    clearMsg(c);
+    const byDay = new Map();
+    j.history.forEach(([x, y]) => byDay.set(new Date(x).toISOString().slice(0, 10), y));
+    c.line.setData([...byDay].map(([time, value]) => ({ time, value })));
+    if (c.first) { c.chart.timeScale().fitContent(); c.first = false; }
+    const [zh, color] = FNG_RATING[j.rating] || [j.rating, "#9ca3af"];
+    c.cell.querySelector(".px").textContent = Math.round(j.score);
+    const chg = c.cell.querySelector(".chg");
+    chg.textContent = zh; chg.className = "chg"; chg.style.color = color;
+    setBadge(c, zh, color);
+    const r = (v) => v == null ? "—" : Math.round(v);
+    c.cell.querySelector(".mas").innerHTML =
+      `<span>前日 ${r(j.previous_close)}</span><span>1 週前 ${r(j.previous_1_week)}</span>` +
+      `<span>1 個月前 ${r(j.previous_1_month)}</span><span>1 年前 ${r(j.previous_1_year)}</span>`;
+    c.cell.querySelector(".upd").textContent = `資料時間 ${taipeiClock(Date.parse(j.timestamp) / 1000)}`;
+  } catch (e) { setMsg(c, `抓不到資料：${e.message}`); }
+}
+
+// ---- 上市融資維持率 ----
+// 最新一天直接抓；過去 20 個交易日慢慢補（證交所有流量限制），補過的存在瀏覽器裡
+const MARGIN_KEY = "margin-hist.v1", MARGIN_DAYS = 20, MARGIN_GAP_MS = 3500;
+const loadHist = () => { try { return JSON.parse(localStorage.getItem(MARGIN_KEY)) || {}; } catch { return {}; } };
+const saveHist = (h) => { try { localStorage.setItem(MARGIN_KEY, JSON.stringify(h)); } catch {} };
+let marginFilling = false;
+
+function drawMargin(c, hist) {
+  const pts = Object.entries(hist).filter(([, v]) => v != null).sort(([a], [b]) => a.localeCompare(b));
+  c.line.setData(pts.map(([d, v]) => ({ time: ymdDash(d), value: v })));
+  if (pts.length) c.chart.timeScale().fitContent();
+  return pts;
+}
+
+async function refreshMargin(c) {
+  try {
+    const j = await fetch(`${API}?src=margin`).then(r => r.json());
+    if (!j.ok) throw new Error(j.error || j.detail || j.reason || "沒有資料");
+    clearMsg(c);
+    const hist = loadHist();
+    hist[j.date] = j.ratio;
+    saveHist(hist);
+    const pts = drawMargin(c, hist);
+    showMargin(c, pts, j);
+    fillMarginHistory(c, j.date);
+  } catch (e) { setMsg(c, `抓不到資料：${e.message}`); }
+}
+
+function showMargin(c, pts, latest) {
+  const last = pts.at(-1), prev = pts.at(-2);
+  c.cell.querySelector(".px").textContent = `${last[1].toFixed(2)}%`;
+  const chg = c.cell.querySelector(".chg");
+  if (prev) {
+    const d = last[1] - prev[1];
+    chg.textContent = `${d >= 0 ? "+" : ""}${d.toFixed(2)}`;
+    chg.className = "chg " + (d >= 0 ? "up" : "down");
+  }
+  const v = last[1];
+  const [zone, color] = v >= 166.7 ? ["高於原始水準", "#16a34a"] : v >= 140 ? ["正常", "#65a30d"] : v >= 130 ? ["偏低", "#f97316"] : ["追繳線以下", "#dc2626"];
+  setBadge(c, zone, color);
+  const date = last[0];
+  c.cell.querySelector(".upd").textContent = `資料日 ${+date.slice(4, 6)}/${+date.slice(6)}`;
+  if (latest) c.cell.querySelector(".mas").innerHTML =
+    `<span>融資市值 ${(latest.marketValue / 1e8).toFixed(0)} 億</span><span>融資金額 ${(latest.loanAmount / 1e8).toFixed(0)} 億</span>`;
+}
+
+async function fillMarginHistory(c, latestDate) {
+  if (marginFilling) return;
+  marginFilling = true;
+  try {
+    const hist = loadHist();
+    const d = new Date(`${ymdDash(latestDate)}T12:00:00Z`);
+    let have = Object.keys(hist).filter(k => hist[k] != null && k <= latestDate).length;
+    for (let i = 0; i < 45 && have < MARGIN_DAYS; i++) {
+      d.setUTCDate(d.getUTCDate() - 1);
+      const dow = d.getUTCDay();
+      if (dow === 0 || dow === 6) continue;
+      const key = d.toISOString().slice(0, 10).replace(/-/g, "");
+      if (key in hist) { if (hist[key] != null) have++; continue; }
+      if (!charts.includes(c)) return; // 已經切到別的群組
+      const status = c.cell.querySelector(".upd");
+      status.textContent = `補歷史資料 ${have}/${MARGIN_DAYS}…`;
+      try {
+        const j = await fetch(`${API}?src=margin&date=${key}`).then(r => r.json());
+        if (j.ok) { hist[key] = j.ratio; have++; }
+        else if (j.reason) hist[key] = null; // 休市日
+        else throw new Error(j.detail || j.error);
+        saveHist(hist);
+        showMargin(c, drawMargin(c, hist));
+      } catch (e) {
+        status.textContent = `歷史資料暫停：${e.message}`;
+        return; // 可能被證交所限流，下次重新整理再繼續
+      }
+      await new Promise(r => setTimeout(r, MARGIN_GAP_MS));
+    }
+    const pts = drawMargin(c, hist);
+    if (pts.length) c.cell.querySelector(".upd").textContent = `資料日 ${+pts.at(-1)[0].slice(4, 6)}/${+pts.at(-1)[0].slice(6)}`;
+  } finally { marginFilling = false; }
 }
 
 let dragFrom = null;
