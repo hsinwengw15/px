@@ -433,6 +433,7 @@ function createSpecial(c, cell, box) {
   });
   const line = chart.addLineSeries({ color: "#d6127e", lineWidth: 2, priceLineVisible: false,
     ...(def.range ? { autoscaleInfoProvider: () => ({ priceRange: { minValue: def.range[0], maxValue: def.range[1] } }) } : {}) });
+  if (def.range) chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.04, bottom: 0.04 } });
   def.lines.forEach(([price, title]) => line.createPriceLine({ price, title, color: dark ? "#3b4652" : "#c4cad1",
     lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true }));
   return { special: c.symbol, chart, line, cell, first: true };
