@@ -411,7 +411,7 @@ async function refresh() {
 
 // ================= 特殊面板 =================
 const SPECIAL = {
-  "@MARGIN": { hint: "證交所資料計算｜每日收盤後更新",
+  "@MARGIN": { hint: "證交所資料計算｜每晚更新",
     lines: [[166.7, "166 原始水準"], [140, "140"], [130, "130 追繳線"]] },
   "@FNG": { hint: "CNN Business｜0 極度恐懼 ～ 100 極度貪婪",
     lines: [[75, "75"], [55, "55"], [45, "45"], [25, "25"]], range: [0, 100] },
@@ -479,83 +479,52 @@ async function refreshFng(c) {
 }
 
 // ---- 上市融資維持率 ----
-// 最新一天直接抓；過去 20 個交易日慢慢補（證交所有流量限制），補過的存在瀏覽器裡
-const MARGIN_KEY = "margin-hist.v1", MARGIN_DAYS = 20, MARGIN_GAP_MS = 3500;
-const loadHist = () => { try { return JSON.parse(localStorage.getItem(MARGIN_KEY)) || {}; } catch { return {}; } };
-const saveHist = (h) => { try { localStorage.setItem(MARGIN_KEY, JSON.stringify(h)); } catch {} };
-let marginFilling = false;
+// 歷史資料：GitHub Actions 每天晚上算好存在 data/margin.csv，直接讀取
+// 最新一天：另外向 Worker 問一次，CSV 還沒更新時也能看到最新數字
+const MARGIN_CSV = "data/margin.csv", MARGIN_SHOW = 120; // 預設顯示最近 120 個交易日
 
-function drawMargin(c, hist) {
-  const pts = Object.entries(hist).filter(([, v]) => v != null).sort(([a], [b]) => a.localeCompare(b));
-  c.line.setData(pts.map(([d, v]) => ({ time: ymdDash(d), value: v })));
-  if (pts.length) c.chart.timeScale().fitContent();
-  return pts;
+async function loadMarginCsv() {
+  const res = await fetch(`${MARGIN_CSV}?t=${Math.floor(Date.now() / 600000)}`); // 10 分鐘內共用快取
+  if (!res.ok) return [];
+  return (await res.text()).trim().split("\n").slice(1).map(l => l.split(","))
+    .filter(r => /^\d{4}-\d{2}-\d{2}$/.test(r[0]))
+    .map(([date, ratio, mv, amt]) => ({ date, ratio: +ratio, mv: +mv, amt: +amt }));
 }
 
 async function refreshMargin(c) {
   try {
-    const j = await fetch(`${API}?src=margin`).then(r => r.json());
-    if (!j.ok) throw new Error(j.error || j.detail || j.reason || "沒有資料");
-    clearMsg(c);
-    const hist = loadHist();
-    hist[j.date] = j.ratio;
-    saveHist(hist);
-    const pts = drawMargin(c, hist);
-    showMargin(c, pts, j);
-    fillMarginHistory(c, j.date);
-  } catch (e) { setMsg(c, `抓不到資料：${e.message}`); }
-}
-
-function showMargin(c, pts, latest) {
-  const last = pts.at(-1), prev = pts.at(-2);
-  c.cell.querySelector(".px").textContent = `${last[1].toFixed(2)}%`;
-  const chg = c.cell.querySelector(".chg");
-  if (prev) {
-    const d = last[1] - prev[1];
-    chg.textContent = `${d >= 0 ? "+" : ""}${d.toFixed(2)}`;
-    chg.className = "chg " + (d >= 0 ? "up" : "down");
-  }
-  const v = last[1];
-  const [zone, color] = v >= 166.7 ? ["高於原始水準", "#16a34a"] : v >= 140 ? ["正常", "#65a30d"] : v >= 130 ? ["偏低", "#f97316"] : ["追繳線以下", "#dc2626"];
-  setBadge(c, zone, color);
-  const date = last[0];
-  c.cell.querySelector(".upd").textContent = `資料日 ${+date.slice(4, 6)}/${+date.slice(6)}`;
-  if (latest) c.cell.querySelector(".mas").innerHTML =
-    `<span>融資市值 ${(latest.marketValue / 1e8).toFixed(0)} 億</span><span>融資金額 ${(latest.loanAmount / 1e8).toFixed(0)} 億</span>`;
-}
-
-async function fillMarginHistory(c, latestDate) {
-  if (marginFilling) return;
-  marginFilling = true;
-  try {
-    const hist = loadHist();
-    const d = new Date(`${ymdDash(latestDate)}T12:00:00Z`);
-    let have = Object.keys(hist).filter(k => hist[k] != null && k <= latestDate).length;
-    for (let i = 0; i < 45 && have < MARGIN_DAYS; i++) {
-      d.setUTCDate(d.getUTCDate() - 1);
-      const dow = d.getUTCDay();
-      if (dow === 0 || dow === 6) continue;
-      const key = d.toISOString().slice(0, 10).replace(/-/g, "");
-      if (key in hist) { if (hist[key] != null) have++; continue; }
-      if (!charts.includes(c)) return; // 已經切到別的群組
-      const status = c.cell.querySelector(".upd");
-      status.textContent = `補歷史資料 ${have}/${MARGIN_DAYS}…`;
-      try {
-        const j = await fetch(`${API}?src=margin&date=${key}`).then(r => r.json());
-        if (j.ok) { hist[key] = j.ratio; have++; }
-        else if (j.reason) hist[key] = null; // 休市日
-        else throw new Error(j.detail || j.error);
-        saveHist(hist);
-        showMargin(c, drawMargin(c, hist));
-      } catch (e) {
-        status.textContent = `歷史資料暫停：${e.message}`;
-        return; // 可能被證交所限流，下次重新整理再繼續
-      }
-      await new Promise(r => setTimeout(r, MARGIN_GAP_MS));
+    const [rows, latest] = await Promise.all([
+      loadMarginCsv().catch(() => []),
+      fetch(`${API}?src=margin`).then(r => r.json()).catch(() => null),
+    ]);
+    if (latest?.ok) {
+      const d = ymdDash(latest.date);
+      if (!rows.length || rows.at(-1).date < d) rows.push({ date: d, ratio: latest.ratio, mv: latest.marketValue, amt: latest.loanAmount });
     }
-    const pts = drawMargin(c, hist);
-    if (pts.length) c.cell.querySelector(".upd").textContent = `資料日 ${+pts.at(-1)[0].slice(4, 6)}/${+pts.at(-1)[0].slice(6)}`;
-  } finally { marginFilling = false; }
+    if (!rows.length) throw new Error(latest?.error || latest?.detail || "沒有資料");
+    clearMsg(c);
+    c.line.setData(rows.map(r => ({ time: r.date, value: r.ratio })));
+    if (c.first) {
+      const n = rows.length;
+      c.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - MARGIN_SHOW), to: n });
+      c.first = false;
+    }
+    const last = rows.at(-1), prev = rows.at(-2);
+    c.cell.querySelector(".px").textContent = `${last.ratio.toFixed(2)}%`;
+    const chg = c.cell.querySelector(".chg");
+    if (prev) {
+      const d = last.ratio - prev.ratio;
+      chg.textContent = `${d >= 0 ? "+" : ""}${d.toFixed(2)}`;
+      chg.className = "chg " + (d >= 0 ? "up" : "down");
+    }
+    const v = last.ratio;
+    const [zone, color] = v >= 166.7 ? ["高於原始水準", "#16a34a"] : v >= 140 ? ["正常", "#65a30d"] : v >= 130 ? ["偏低", "#f97316"] : ["追繳線以下", "#dc2626"];
+    setBadge(c, zone, color);
+    const [, mm, dd] = last.date.split("-");
+    c.cell.querySelector(".upd").textContent = `資料日 ${+mm}/${+dd}｜${rows.length} 筆`;
+    c.cell.querySelector(".mas").innerHTML = last.mv
+      ? `<span>融資市值 ${(last.mv / 1e8).toFixed(0)} 億</span><span>融資金額 ${(last.amt / 1e8).toFixed(0)} 億</span>` : "";
+  } catch (e) { setMsg(c, `抓不到資料：${e.message}`); }
 }
 
 let dragFrom = null;
