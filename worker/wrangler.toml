@@ -1,0 +1,5 @@
+# Cloudflare Worker 設定（給 GitHub Actions 自動部署用）
+# name 必須跟 Cloudflare 上現有的 Worker 名稱一樣，才會更新同一個 Worker
+name = "quote-proxy"
+main = "worker.js"
+compatibility_date = "2026-11-01"
