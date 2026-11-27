@@ -467,7 +467,16 @@ function createSpecial(c, cell, box) {
   if (def.range) chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.04, bottom: 0.04 } });
   def.lines.forEach(([price, title]) => line.createPriceLine({ price, title, color: dark ? "#3b4652" : "#c4cad1",
     lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true }));
-  return { special: c.symbol, chart, line, cell, first: true };
+  // 融資維持率：另外畫融資市值、融資金額（左側刻度，單位億元）
+  let mvLine = null, amtLine = null;
+  if (c.symbol === "@MARGIN") {
+    chart.applyOptions({ leftPriceScale: { visible: true, borderVisible: false } });
+    const yi = { type: "custom", minMove: 1, formatter: (v) => `${Math.round(v).toLocaleString("en-US")} 億` };
+    const opt = { priceScaleId: "left", lineWidth: 1, priceFormat: yi, priceLineVisible: false };
+    mvLine = chart.addLineSeries({ ...opt, color: MARGIN_MV_COLOR, title: "融資市值" });
+    amtLine = chart.addLineSeries({ ...opt, color: MARGIN_AMT_COLOR, title: "融資金額" });
+  }
+  return { special: c.symbol, chart, line, mvLine, amtLine, cell, first: true };
 }
 
 async function refreshSpecial(c) {
@@ -512,6 +521,7 @@ async function refreshFng(c) {
 // ---- 上市融資維持率 ----
 // 歷史資料：GitHub Actions 每天晚上算好存在 data/margin.csv，直接讀取
 // 最新一天：另外向 Worker 問一次，CSV 還沒更新時也能看到最新數字
+const MARGIN_MV_COLOR = "#3b82f6", MARGIN_AMT_COLOR = "#f59e0b";
 const MARGIN_CSV = "data/margin.csv", MARGIN_SHOW = 120; // 預設顯示最近 120 個交易日
 
 async function loadMarginCsv() {
@@ -535,6 +545,9 @@ async function refreshMargin(c) {
     if (!rows.length) throw new Error(latest?.error || latest?.detail || "沒有資料");
     clearMsg(c);
     c.line.setData(rows.map(r => ({ time: r.date, value: r.ratio })));
+    const withAmt = rows.filter(r => r.mv > 0 && r.amt > 0);
+    c.mvLine?.setData(withAmt.map(r => ({ time: r.date, value: r.mv / 1e8 })));
+    c.amtLine?.setData(withAmt.map(r => ({ time: r.date, value: r.amt / 1e8 })));
     if (c.first) {
       const n = rows.length;
       c.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - MARGIN_SHOW), to: n });
@@ -554,7 +567,8 @@ async function refreshMargin(c) {
     const [, mm, dd] = last.date.split("-");
     c.cell.querySelector(".upd").textContent = `資料日 ${+mm}/${+dd}｜${rows.length} 筆`;
     c.cell.querySelector(".mas").innerHTML = last.mv
-      ? `<span>融資市值 ${(last.mv / 1e8).toFixed(0)} 億</span><span>融資金額 ${(last.amt / 1e8).toFixed(0)} 億</span>` : "";
+      ? `<span style="color:${MARGIN_MV_COLOR}">融資市值 ${(last.mv / 1e8).toFixed(0)} 億</span>` +
+        `<span style="color:${MARGIN_AMT_COLOR}">融資金額 ${(last.amt / 1e8).toFixed(0)} 億</span>` : "";
   } catch (e) { setMsg(c, `抓不到資料：${e.message}`); }
 }
 
