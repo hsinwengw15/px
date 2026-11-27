@@ -273,16 +273,47 @@ async function fetchRaw(symbol, iv) {
   const daily = ["1d", "1wk", "1mo"].includes(iv.iv);
   const off = r.meta.gmtoffset || 0;
   const candles = [], volumes = [];
+  const holes = []; // Yahoo 日線偶爾整根是空值（明明有交易），記下來等一下用小時線補
   (r.timestamp || []).forEach((t, k) => {
-    if (q.open[k] == null || q.close[k] == null) return;
+    if (q.open[k] == null || q.close[k] == null) {
+      if (iv.iv === "1d" && Date.now() / 1000 - t < 28 * 86400) holes.push(new Date((t + off) * 1000).toISOString().slice(0, 10));
+      return;
+    }
     // 分鐘線：換成台灣時間顯示；日線以上：用交易所當地日期
     const time = daily ? new Date((t + off) * 1000).toISOString().slice(0, 10) : t + TPE;
     candles.push({ time, open: q.open[k], high: q.high[k], low: q.low[k], close: q.close[k] });
     volumes.push({ time, value: q.volume?.[k] || 0, up: q.close[k] >= q.open[k] });
   });
+  if (holes.length) await fillDailyHoles(symbol, holes, off, candles, volumes);
   // 同一時間只留最後一根（Yahoo 偶爾會重複最後一筆）
   const dedupe = (arr) => arr.filter((x, k) => k === arr.length - 1 || arr[k + 1].time !== x.time);
   return { meta: r.meta, candles: dedupe(candles), volumes: dedupe(volumes) };
+}
+
+// 用 60 分線把缺的日 K 組回來：開＝第一根開、收＝最後一根收、高低取極值、量加總
+async function fillDailyHoles(symbol, holes, off, candles, volumes) {
+  try {
+    const j = await fetch(`${API}?symbol=${encodeURIComponent(symbol)}&interval=60m&range=1mo`).then(r => r.json());
+    const r = j.chart?.result?.[0];
+    if (!r) return;
+    const q = r.indicators.quote[0];
+    const days = new Map();
+    (r.timestamp || []).forEach((t, k) => {
+      if (q.open[k] == null || q.close[k] == null) return;
+      const d = new Date((t + off) * 1000).toISOString().slice(0, 10);
+      if (!holes.includes(d)) return;
+      const c = days.get(d);
+      if (!c) days.set(d, { time: d, open: q.open[k], high: q.high[k], low: q.low[k], close: q.close[k], vol: q.volume?.[k] || 0 });
+      else Object.assign(c, { high: Math.max(c.high, q.high[k]), low: Math.min(c.low, q.low[k]), close: q.close[k], vol: c.vol + (q.volume?.[k] || 0) });
+    });
+    days.forEach(({ vol, ...c }) => {
+      candles.push(c);
+      volumes.push({ time: c.time, value: vol, up: c.close >= c.open });
+    });
+    const byTime = (a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0);
+    candles.sort(byTime);
+    volumes.sort(byTime);
+  } catch { /* 補不到就算了，照原樣顯示 */ }
 }
 
 // ---- 畫面 ----
